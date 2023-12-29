@@ -24,10 +24,13 @@ public class Player : NetworkBehaviour
 	private bool isJumping = true;
 
 	[SyncVar] public Transform spawnPoint;
+	public SpawnPointScript spawnPointScript;
 
 	[SyncVar] public bool inputEnabled = false;
 
 	[SyncVar] public string name;
+
+	public Camera cam;
 
 	void Start()
 	{
@@ -39,14 +42,19 @@ public class Player : NetworkBehaviour
 
 		//Add the new player to the player holder
 		transform.parent = manager.playerHolder;
-		
+
+		//Set the main camera
+		cam = Camera.main;
+
+		//Set the spawn point script
+		spawnPointScript = spawnPoint.GetComponent<SpawnPointScript>();
 		
 		//Add the new player to the player holder
-		spawnPoint.GetComponent<SpawnPointScript>().assignedPlayer = transform;
+		spawnPointScript.assignedPlayer = transform;
 
 		//Set the players colour
 		colour = spawnPoint.GetComponent<MeshRenderer>().material.color;
-		
+
 		//Add a win/lose indicator for the player
 		indicator = Instantiate(manager.winLoseIndicatorPrefab).GetComponent<WinLoseIndicatorScript>();
 
@@ -63,14 +71,10 @@ public class Player : NetworkBehaviour
 		Material mat = new Material(mesh.material);
 
 		//Set the material colour, but invisible
-		mat.SetColor("_BaseColor", new Color(colour.r, colour.g, colour.b, 0));
+		mat.SetColor("_BaseColor", spawnPointScript.colour);
 
 		//Assign the instanced material
 		mesh.material = mat;
-
-		//Set the material colour properly
-		mat.SetColor("_BaseColor", colour);
-
 
 		//Set the rigidbody var
 		rb = gameObject.GetComponent<Rigidbody>();
@@ -79,8 +83,9 @@ public class Player : NetworkBehaviour
 	// Update is called once per frame
 	void Update()
 	{
+		//Set the players name
 		gameObject.name = name;
-		
+
 
 		//Only the local player can run this
 		if (isLocalPlayer)
@@ -93,17 +98,20 @@ public class Player : NetworkBehaviour
 			//Make the camera follow the player
 			manager.virtualCamera.Follow = transform;
 
+			//Vertical action triggered?
+			if (YDown && Y > 0 && !isJumping)
+			{
+				//Add some force to bump the player up
+				rb.AddForce(cam.transform.up * jumpPower, ForceMode.Impulse);
+				
+				//Mark the player as jumping
+				isJumping = true;
+			}
 
+			//If the inputs are enabled
 			if (manager.clientManager.playersInputEnabled && inputEnabled)
 			{
-				//Up action triggered?
-				if (YDown && Y > 0 && !isJumping)
-				{
-					rb.AddForce(manager.cam.transform.up * jumpPower, ForceMode.Impulse);
-					isJumping = true;
-				}
-
-				//Up action triggered?
+				//Horizontal action triggered?
 				if (XDown && X != 0)
 				{
 					rb.AddTorque(new Vector3(0, 0, -rotatePower * X), ForceMode.Impulse);
@@ -144,7 +152,7 @@ public class Player : NetworkBehaviour
 	{
 		if (other.CompareTag("finish-zone"))
 		{
-			manager.playerEnteredFinishZone(this);
+			manager.PlayerEnteredFinishZone(this);
 		}
 	}
 
