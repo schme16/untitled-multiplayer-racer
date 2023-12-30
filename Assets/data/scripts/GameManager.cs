@@ -333,7 +333,7 @@ public class GameManager : MonoBehaviour
 		}
 
 		//Set the network connection address to address
-		networkManager.networkAddress = address;
+		networkManager.networkAddress = "localhost";
 
 		//Attempt to connect the the address
 		networkManager.StartClient();

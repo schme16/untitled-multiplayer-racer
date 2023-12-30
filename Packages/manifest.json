@@ -53,6 +53,22 @@
         "com.openupm",
         "net.tnrd.autohook"
       ]
+    },
+    {
+      "name": "OpenUPM - SimpleWebTransport",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "com.james-frowen"
+      ]
+    },
+    {
+      "name": "OpenUPM",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "com.miragenet.mirage",
+        "com.miragenet",
+        "com.cysharp.unitask"
+      ]
     }
   ]
 }
