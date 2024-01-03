@@ -1,23 +1,18 @@
-
-using Mirror;
 using UnityEngine;
 
-public class SpawnPointScript : NetworkBehaviour
+public class SpawnPointScript : MonoBehaviour
 {
-    [SyncVar] public Transform assignedPlayer = null;
+	public Player assignedPlayer = null;
 
-    [SyncVar] public Color colour;
-    
-    // Start is called before the first frame update
-    void Start()
-    {
+	public Color colour;
+
+	// Start is called before the first frame update
+	void Start()
+	{
 		//Set the players colour
 		GetComponent<MeshRenderer>().material.color = colour;
-    }
+	}
 
-    // Update is called once per frame
-    void Update()
-    {
-        
-    }
+	// Update is called once per frame
+	void Update() { }
 }

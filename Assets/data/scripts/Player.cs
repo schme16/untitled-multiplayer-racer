@@ -1,9 +1,8 @@
 using System;
 using System.Collections;
-using Mirror;
 using UnityEngine;
 
-public class Player : NetworkBehaviour
+public class Player : MonoBehaviour
 {
 	public GameManager manager;
 
@@ -19,72 +18,35 @@ public class Player : NetworkBehaviour
 
 	private Vector3 prevPos;
 
-	[SyncVar] public float speed;
+	private string uuid;
 
 	private bool isJumping = true;
+	
+	public bool unsynced = true;
 
-	[SyncVar] public Transform spawnPoint;
+	public float speed;
+	public Transform spawnPoint;
+	public bool inputEnabled = false;
+	public string playerObjectID;
+
+	//This needs to be set properly, as it indicates which prefab can actually run it's logic
+	public bool isLocalPlayer;
+	
+	bool playerChanged;
+
+
 	public SpawnPointScript spawnPointScript;
-
-	[SyncVar] public bool inputEnabled = false;
-
-	[SyncVar] public string name;
-
 	public Camera cam;
 
 	void Start()
 	{
-		//Add the new player to the player holder
-		manager = FindObjectOfType<GameManager>();
-
-		//Place the player at their spawn points position
-		transform.position = spawnPoint.transform.position;
-
-		//Add the new player to the player holder
-		transform.parent = manager.playerHolder;
-
-		//Set the main camera
-		cam = Camera.main;
-
-		//Set the spawn point script
-		spawnPointScript = spawnPoint.GetComponent<SpawnPointScript>();
-		
-		//Add the new player to the player holder
-		spawnPointScript.assignedPlayer = transform;
-
-		//Set the players colour
-		colour = spawnPoint.GetComponent<MeshRenderer>().material.color;
-
-		//Add a win/lose indicator for the player
-		indicator = Instantiate(manager.winLoseIndicatorPrefab).GetComponent<WinLoseIndicatorScript>();
-
-		//Set the follow target for the win/lose indicator to this player
-		indicator.GetComponent<FollowTarget>().target = transform;
-
-		//Sync the input enabled status from the client manager
-		inputEnabled = manager.clientManager.playersInputEnabled;
-
-		//Get the meshes renderer
-		MeshRenderer mesh = GetComponent<MeshRenderer>();
-
-		//Instance the material so that it can be individually altered
-		Material mat = new Material(mesh.material);
-
-		//Set the material colour, but invisible
-		mat.SetColor("_BaseColor", spawnPointScript.colour);
-
-		//Assign the instanced material
-		mesh.material = mat;
-
-		//Set the rigidbody var
-		rb = gameObject.GetComponent<Rigidbody>();
 	}
 
 	// Update is called once per frame
 	void Update()
 	{
 		//Set the players name
-		gameObject.name = name;
+		gameObject.name = playerObjectID;
 
 
 		//Only the local player can run this
@@ -101,6 +63,9 @@ public class Player : NetworkBehaviour
 			//Vertical action triggered?
 			if (YDown && Y > 0 && !isJumping)
 			{
+				//Flag that the player changed
+				playerChanged = true;
+				
 				//Add some force to bump the player up
 				rb.AddForce(cam.transform.up * jumpPower, ForceMode.Impulse);
 				
@@ -109,25 +74,28 @@ public class Player : NetworkBehaviour
 			}
 
 			//If the inputs are enabled
-			if (manager.clientManager.playersInputEnabled && inputEnabled)
+			if (manager.room.playersInputEnabled && inputEnabled)
 			{
 				//Horizontal action triggered?
 				if (XDown && X != 0)
 				{
+					//Flag that the player changed
+					playerChanged = true;
+					
 					rb.AddTorque(new Vector3(0, 0, -rotatePower * X), ForceMode.Impulse);
 				}
 			}
 		}
 
-		if (string.IsNullOrEmpty(manager.clientManager.playerFinished))
+		if (string.IsNullOrEmpty(manager.room.playerFinished))
 		{
 			indicator.winner.gameObject.SetActive(false);
 			indicator.loser.gameObject.SetActive(false);
 		}
 		else
 		{
-			indicator.winner.gameObject.SetActive(name == manager.clientManager.playerFinished);
-			indicator.loser.gameObject.SetActive(name != manager.clientManager.playerFinished);
+			indicator.winner.gameObject.SetActive(playerObjectID == manager.room.playerFinished);
+			indicator.loser.gameObject.SetActive(playerObjectID != manager.room.playerFinished);
 		}
 	}
 
@@ -137,6 +105,12 @@ public class Player : NetworkBehaviour
 		{
 			manager.uiSpeedo.text = (speed.ToString("F1")) + " m/s";
 			CalcVelocity();
+
+			if (true || playerChanged)
+			{
+				manager.SyncLocalPlayer(transform, rb, true);
+				playerChanged = false;
+			}
 		}
 	}
 
@@ -156,7 +130,7 @@ public class Player : NetworkBehaviour
 		}
 	}
 
-	[ClientRpc]
+	
 	public void ResetPlayer()
 	{
 		inputEnabled = false;
