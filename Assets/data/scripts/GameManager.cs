@@ -6,6 +6,8 @@ using NativeWebSocket;
 using Newtonsoft.Json;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.PostProcessing;
 using UnityEngine.SceneManagement;
 
 public class GameManager : MonoBehaviour
@@ -93,10 +95,14 @@ public class GameManager : MonoBehaviour
 
 	//The back button on the gameplay controls screen
 	public Transform uiBackToConnections;
+	
+	//The back button on the gameplay controls screen
+	public Volume postProcessing;
+	
+	public UnityEngine.Rendering.Universal.ChromaticAberration chromaticAberration;
 
 	//Holds a list of all players
 	public List<Player> PlayerList;
-
 
 	//This is the websocket connection object
 	private WebSocket ws;
@@ -193,6 +199,9 @@ public class GameManager : MonoBehaviour
 	// Start is called before the first frame update
 	void Start()
 	{
+		postProcessing.profile.TryGet<UnityEngine.Rendering.Universal.ChromaticAberration>(out chromaticAberration);
+			//.TryGetSettings(out chromaticAberration);
+
 		room = new RoomVariable();
 		lastRoom = new RoomVariable();
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using UnityEngine;
+using UnityEngine.Rendering.PostProcessing;
 
 public class Player : MonoBehaviour
 {
@@ -21,7 +22,7 @@ public class Player : MonoBehaviour
 	private string uuid;
 
 	private bool isJumping = true;
-	
+
 	public bool unsynced = true;
 
 	public float speed;
@@ -31,16 +32,14 @@ public class Player : MonoBehaviour
 
 	//This needs to be set properly, as it indicates which prefab can actually run it's logic
 	public bool isLocalPlayer;
-	
+
 	bool playerChanged;
 
 
 	public SpawnPointScript spawnPointScript;
 	public Camera cam;
 
-	void Start()
-	{
-	}
+	void Start() { }
 
 	// Update is called once per frame
 	void Update()
@@ -65,10 +64,10 @@ public class Player : MonoBehaviour
 			{
 				//Flag that the player changed
 				playerChanged = true;
-				
+
 				//Add some force to bump the player up
 				rb.AddForce(cam.transform.up * jumpPower, ForceMode.Impulse);
-				
+
 				//Mark the player as jumping
 				isJumping = true;
 			}
@@ -81,7 +80,7 @@ public class Player : MonoBehaviour
 				{
 					//Flag that the player changed
 					playerChanged = true;
-					
+
 					rb.AddTorque(new Vector3(0, 0, -rotatePower * X), ForceMode.Impulse);
 				}
 			}
@@ -104,14 +103,29 @@ public class Player : MonoBehaviour
 		if (isLocalPlayer)
 		{
 			manager.uiSpeedo.text = (speed.ToString("F1")) + " m/s";
+			manager.chromaticAberration.intensity.Override(remap(speed, 3, 20, 0, 1));
 			CalcVelocity();
-
 			if (true || playerChanged)
 			{
 				manager.SyncLocalPlayer(transform, rb, true);
 				playerChanged = false;
 			}
 		}
+	}
+
+	float remap(float from, float fromMin, float fromMax, float toMin, float toMax)
+	{
+		var fromAbs = from - fromMin;
+		var fromMaxAbs = fromMax - fromMin;
+
+		var normal = fromAbs / fromMaxAbs;
+
+		var toMaxAbs = toMax - toMin;
+		var toAbs = toMaxAbs * normal;
+
+		var to = toAbs + toMin;
+
+		return to;
 	}
 
 	private void OnCollisionEnter(Collision other)
@@ -130,7 +144,7 @@ public class Player : MonoBehaviour
 		}
 	}
 
-	
+
 	public void ResetPlayer()
 	{
 		inputEnabled = false;
