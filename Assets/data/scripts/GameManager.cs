@@ -23,7 +23,7 @@ public class GameManager : MonoBehaviour
 	public RoomVariable lastRoom;
 
 	//This is the amount of time to count in before a game starts
-	public long countIn = 4000;
+	public long countIn = 3000;
 
 	//This is the winner/loser indicator prefab
 	public WinLoseIndicatorScript winLoseIndicatorPrefab;
@@ -704,7 +704,8 @@ public class GameManager : MonoBehaviour
 					room.playersInputEnabled = packet.playersInputEnabled;
 					room.countdownStarted = packet.countdownStarted;
 					room.countdownFinished = packet.countdownFinished;
-
+					room.playerFinished = packet.playerFinished;
+					
 					SetState(packet.state, true);
 					Loop();
 
@@ -786,6 +787,8 @@ public class GameManager : MonoBehaviour
 			room.countdownStarted = player.countdownStarted;
 			room.countdownFinished = player.countdownFinished;
 			room.playerFinished = player.playerFinished;
+			Debug.Log(22222);
+			Debug.Log(room.playerFinished);
 
 			//Signal that the room variables have changed
 			roomVariableChanged = true;
@@ -911,7 +914,6 @@ public class GameManager : MonoBehaviour
 				packet.type = "sync-variables";
 				packet.state = room.state;
 				packet.playersInputEnabled = room.playersInputEnabled;
-				/*packet.timer = room.timer;*/
 				packet.playerFinished = room.playerFinished;
 				packet.countdownStarted = room.countdownStarted;
 				packet.countdownFinished = room.countdownFinished;
@@ -955,11 +957,18 @@ public class GameManager : MonoBehaviour
 	{
 		if (room.playerFinished == null && player.inputEnabled)
 		{
-			room.playerFinished = player.playerObjectID;
-			room.countdownFinished = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+			if (localPlayer.isHost)
+			{
+				room.playerFinished = player.playerObjectID;
 
-			//Signal that the room variables have changed
-			roomVariableChanged = true;
+				Debug.Log(11111);
+				Debug.Log(room.playerFinished);
+
+				room.countdownFinished = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
+				//Signal that the room variables have changed
+				roomVariableChanged = true;
+			}
 		}
 
 		player.inputEnabled = false;
