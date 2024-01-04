@@ -137,8 +137,8 @@ public class Player : MonoBehaviour
 		transform.position = spawnPoint.position;
 		transform.rotation = new Quaternion();
 
-		rb.velocity = Vector3.zero;
-		rb.angularVelocity = Vector3.zero;
+		//rb.velocity = Vector3.zero;
+		//rb.angularVelocity = Vector3.zero;
 	}
 
 

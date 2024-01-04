@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Cinemachine;
 using NativeWebSocket;
 using Newtonsoft.Json;
@@ -11,6 +10,9 @@ using UnityEngine.SceneManagement;
 
 public class GameManager : MonoBehaviour
 {
+	[DllImport("__Internal")]
+	static extern void passCopyToBrowser(string str);
+
 	//This is the network manager, it handles connection, disconnection, etc
 	public string serverUrl; //wss://cube-run.shanegadsby.com
 
@@ -19,6 +21,9 @@ public class GameManager : MonoBehaviour
 
 	//This is the playable prefab
 	public RoomVariable lastRoom;
+
+	//This is the amount of time to count in before a game starts
+	public long countIn = 4000;
 
 	//This is the winner/loser indicator prefab
 	public WinLoseIndicatorScript winLoseIndicatorPrefab;
@@ -47,6 +52,8 @@ public class GameManager : MonoBehaviour
 	//Waiting for room text
 	public TextMeshProUGUI uiWaitingForRoomText;
 
+	//Round countdown timer text
+	public TextMeshProUGUI uiCountdownTimer;
 
 	//Player speed meter text
 	public TextMeshProUGUI uiSpeedo;
@@ -78,6 +85,16 @@ public class GameManager : MonoBehaviour
 	//Game RoomCode value text
 	public TextMeshProUGUI uiRoomCodeText;
 
+	//The gameplay controls
+	public Transform uiControlsButton;
+
+	//The gameplay controls
+	public Transform uiControls;
+
+	//The back button on the gameplay controls screen
+	public Transform uiBackToConnections;
+
+	//Holds a list of all players
 	public List<Player> PlayerList;
 
 
@@ -104,7 +121,8 @@ public class GameManager : MonoBehaviour
 		public bool playersInputEnabled;
 		public string playerFinished;
 		public float timer;
-		public float countdownStarted;
+		public long countdownStarted;
+		public long countdownFinished;
 	}
 
 	public struct NewRoomPacket
@@ -119,14 +137,18 @@ public class GameManager : MonoBehaviour
 		public string type;
 		public string roomID;
 	}
+
 	public struct VariableSyncPacket
 	{
 		public string type;
 		public string state;
+
 		public bool playersInputEnabled;
-		public float timer;
+
+		/*public float timer;*/
 		public string playerFinished;
-		public float countdownStarted;
+		public long countdownStarted;
+		public long countdownFinished;
 	}
 
 	public struct Vector3Json
@@ -142,8 +164,10 @@ public class GameManager : MonoBehaviour
 		public string type;
 		public string state;
 		public bool playersInputEnabled;
+
 		public string playerFinished;
-		public float timer;
+
+		/*public float timer;*/
 		public string roomID;
 		public string playerID;
 		public int playerIndex;
@@ -155,7 +179,8 @@ public class GameManager : MonoBehaviour
 		public string message;
 		public Vector3Json pos;
 		public Vector3Json rot;
-		public float countdownStarted;
+		public long countdownStarted;
+		public long countdownFinished;
 	}
 
 	public struct PositionSyncSocket
@@ -171,19 +196,19 @@ public class GameManager : MonoBehaviour
 		room = new RoomVariable();
 		lastRoom = new RoomVariable();
 
-		//Set the game to the connections screen 
-		StartWaitingForConnection();
+		//Set the game to the title screen
+		SetState("connections");
 	}
 
 	// Update is called once per frame
 	void Update()
 	{
-		#if (!UNITY_WEBGL || UNITY_EDITOR)
+#if (!UNITY_WEBGL || UNITY_EDITOR)
 			if (ws != null)
 			{
 				ws.DispatchMessageQueue();
 			}
-		#endif
+#endif
 
 		Loop();
 	}
@@ -199,7 +224,6 @@ public class GameManager : MonoBehaviour
 		//This is stuff that's run just once when the states change
 		if ((room.state != lastRoom.state && !String.IsNullOrEmpty(room.state)) || reloadUI)
 		{
-
 			//Set the lastState variable to the current state
 			lastRoom.state = room.state;
 
@@ -212,6 +236,13 @@ public class GameManager : MonoBehaviour
 			//Loop over each state
 			switch (room.state)
 			{
+				case "controls":
+
+					//Start the waiting for player state
+					StartControlsScreen();
+
+					break;
+
 				case "connections":
 
 					//Start the waiting for player state
@@ -276,6 +307,9 @@ public class GameManager : MonoBehaviour
 				case "racing":
 
 					//Show the game timer ui
+					uiCountdownTimer.gameObject.SetActive(true);
+
+					//Show the game timer ui
 					uiTimerGroup.gameObject.SetActive(true);
 
 					//Show the room code
@@ -286,7 +320,14 @@ public class GameManager : MonoBehaviour
 					break;
 
 				case "finished":
+					//Show the game timer ui
+					uiTimerGroup.gameObject.SetActive(true);
 
+					//Show the room code
+					uiRoomCodeGroup.gameObject.SetActive(true);
+
+					//Show the player speed ui
+					uiSpeedo.gameObject.SetActive(true);
 					//Run the race finish function
 					FinishRace(reloadUI);
 
@@ -321,31 +362,53 @@ public class GameManager : MonoBehaviour
 
 			case "countdown":
 
+				long countdown = countIn - (DateTimeOffset.Now.ToUnixTimeMilliseconds() - room.countdownStarted);
+
+
+				uiCountdownTimer.text = ((countdown / 1000) + 1).ToString();
+
+				if (countdown <= 0)
+				{
+					uiCountdownTimer.text = "Go!";
+					SetState("start");
+				}
+
 				break;
 
 			case "racing":
+
+				uiCountdownTimer.alpha = Mathf.Clamp(uiCountdownTimer.alpha - Time.deltaTime, 0, 1);
 
 				//If no player has won
 				if (string.IsNullOrEmpty(room.playerFinished))
 				{
 					//Increase the timer
-					room.timer += Time.deltaTime;
+					//room.timer += Time.deltaTime;
 
-					//Signal that the room variables have changed
-					//roomVariableChanged = true;
-
-					//Set the timer ui to the new time, with 2 decimal places
-					uiTimerText.text = room.timer.ToString("F2");
+					if (room.countdownStarted > 100000)
+					{
+						long offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+						//Set the timer ui to the new time, with 2 decimal places
+						uiTimerText.text = (((float)(offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
+					}
+					else
+					{
+						uiTimerText.text = "";
+					}
 				}
 				else
 				{
+					long _offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+					uiTimerText.text = (((float)(_offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
+
 					SetState("finished");
 				}
 
 				break;
 
 			case "finished":
-
+				long __offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+				uiTimerText.text = (((float)(__offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
 				break;
 		}
 	}
@@ -354,8 +417,10 @@ public class GameManager : MonoBehaviour
 	//Hide all UI elements
 	public void ResetRoomVariables()
 	{
-		//Reset the timer
-		room.timer = 0;
+		//Reset the timers
+		room.countdownStarted = 0;
+
+		room.countdownFinished = 0;
 
 		//Disable player inputs
 		room.playersInputEnabled = false;
@@ -366,6 +431,7 @@ public class GameManager : MonoBehaviour
 		//Signal that the room variables have changed
 		roomVariableChanged = true;
 	}
+
 
 	//Hide all UI elements
 	public void ResetUI()
@@ -385,6 +451,8 @@ public class GameManager : MonoBehaviour
 		//
 		uiSpeedo.gameObject.SetActive(false);
 
+		//
+		uiCountdownTimer.gameObject.SetActive(false);
 
 		//
 		uiHostButton.gameObject.SetActive(false);
@@ -406,15 +474,29 @@ public class GameManager : MonoBehaviour
 
 		//
 		uiRoomCodeGroup.gameObject.SetActive(false);
+
+		//
+		uiControlsButton.gameObject.SetActive(false);
+
+		//
+		uiControls.gameObject.SetActive(false);
+
+		//
+		uiBackToConnections.gameObject.SetActive(false);
 	}
 
 	public async void StartWaitingForConnection()
 	{
+		ResetRoomVariables();
+
 		if (ws != null)
 		{
 			await ws.Close();
 			ws = null;
 		}
+
+		//Show the controls button
+		uiControlsButton.gameObject.SetActive(true);
 
 		//Show the host button
 		uiHostButton.gameObject.SetActive(true);
@@ -430,16 +512,27 @@ public class GameManager : MonoBehaviour
 
 		//Show the join ip input field
 		uiHostnameInput.gameObject.SetActive(true);
+	}
 
+
+	public async void StartControlsScreen()
+	{
 		ResetRoomVariables();
+
+		if (ws != null)
+		{
+			await ws.Close();
+			ws = null;
+		}
+
+		uiControls.gameObject.SetActive(true);
+		uiBackToConnections.gameObject.SetActive(true);
 	}
 
 	public void StartWaitingForRoom(bool uiOnly)
 	{
 		//Show the "waiting for players" text
 		uiWaitingForRoomText.gameObject.SetActive(true);
-
-		ResetRoomVariables();
 	}
 
 	public void StartWaitingOnHost(bool uiOnly)
@@ -455,29 +548,37 @@ public class GameManager : MonoBehaviour
 			//Show the start game button 
 			startGameButton.gameObject.SetActive(true);
 		}
-
-		ResetRoomVariables();
 	}
 
 	//This starts the race countdown
 	public void StartCountdown(bool uiOnly)
 	{
+		room.countdownStarted = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
 		//Reset the room
-		ResetRoomVariables();
+		if (localPlayer.isHost)
+		{
+			//Signal that the room variables have changed
+			roomVariableChanged = true;
+		}
 
-		room.countdownStarted = Time.time * 1000;
 
-		//Signal that the room variables have changed
-		roomVariableChanged = true;
+		uiCountdownTimer.text = (countIn / 1000).ToString();
+
+		uiCountdownTimer.gameObject.SetActive(true);
+
+		uiRoomCodeGroup.gameObject.SetActive(true);
+
+		uiCountdownTimer.alpha = 1;
 	}
-	
+
 	//This starts the race
 	public void StartRace(bool uiOnly)
 	{
-		
-
 		//Enable the player controls
 		room.playersInputEnabled = true;
+
+		uiCountdownTimer.gameObject.SetActive(true);
 
 		//Enable local player's inputs
 		foreach (Player player in PlayerList)
@@ -493,6 +594,8 @@ public class GameManager : MonoBehaviour
 	public void RestartRace(bool uiOnly)
 	{
 		room.playerFinished = null;
+
+		room.countdownFinished = 0;
 
 		//Signal that the room variables have changed
 		roomVariableChanged = true;
@@ -533,10 +636,7 @@ public class GameManager : MonoBehaviour
 
 		websocket.OnOpen += () => { wsConnected = true; };
 
-		websocket.OnError += (e) =>
-		{
-			Debug.LogError("Error! " + e);
-		};
+		websocket.OnError += (e) => { Debug.LogError("Error! " + e); };
 
 		websocket.OnClose += (e) =>
 		{
@@ -544,6 +644,7 @@ public class GameManager : MonoBehaviour
 			{
 				SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
 			}
+
 			wsConnected = false;
 		};
 
@@ -558,10 +659,13 @@ public class GameManager : MonoBehaviour
 					OnJoinedRoom(packet, false);
 
 					room.roomID = packet.roomID;
+					room.countdownStarted = packet.countdownStarted;
+					room.countdownFinished = packet.countdownFinished;
+
 					uiRoomCodeText.text = room.roomID;
 
 					//Set the state to waiting for players
-					SetState("waiting for players");
+					SetState(packet.state ?? "waiting for players");
 					break;
 
 				case "player-joined":
@@ -575,7 +679,7 @@ public class GameManager : MonoBehaviour
 					Player p = SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
 					PlayerList.Remove(p);
 					SpawnPoints[packet.playerIndex].assignedPlayer = null;
-					Destroy(p.indicator);
+					Destroy(p.indicator.gameObject);
 					Destroy(p.gameObject);
 
 					if (localPlayer.playerID == packet.newHost)
@@ -591,7 +695,6 @@ public class GameManager : MonoBehaviour
 					{
 						Player remotePlayer = SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
 						remotePlayer.transform.position = new Vector3(packet.pos.x, packet.pos.y, packet.pos.z);
-						//remotePlayer.transform.localScale = new Vector3(packet.scale.x, packet.scale.y, packet.scale.z);
 						remotePlayer.transform.rotation = new Quaternion(packet.rot.x, packet.rot.y, packet.rot.z, packet.rot.w);
 					}
 
@@ -599,8 +702,9 @@ public class GameManager : MonoBehaviour
 
 				case "sync-variables":
 					room.playersInputEnabled = packet.playersInputEnabled;
-					room.timer = packet.timer;
 					room.countdownStarted = packet.countdownStarted;
+					room.countdownFinished = packet.countdownFinished;
+
 					SetState(packet.state, true);
 					Loop();
 
@@ -678,8 +782,9 @@ public class GameManager : MonoBehaviour
 		if (!remote)
 		{
 			room.playersInputEnabled = player.playersInputEnabled;
-			room.timer = player.timer;
+			/*room.timer = player.timer;*/
 			room.countdownStarted = player.countdownStarted;
+			room.countdownFinished = player.countdownFinished;
 			room.playerFinished = player.playerFinished;
 
 			//Signal that the room variables have changed
@@ -806,12 +911,12 @@ public class GameManager : MonoBehaviour
 				packet.type = "sync-variables";
 				packet.state = room.state;
 				packet.playersInputEnabled = room.playersInputEnabled;
-				packet.timer = room.timer;
+				/*packet.timer = room.timer;*/
 				packet.playerFinished = room.playerFinished;
 				packet.countdownStarted = room.countdownStarted;
-				
-				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
+				packet.countdownFinished = room.countdownFinished;
 
+				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
 			}
 
 			roomVariableChanged = false;
@@ -838,11 +943,20 @@ public class GameManager : MonoBehaviour
 		}
 	}
 
+	public void CopyRoomCode()
+	{
+		GUIUtility.systemCopyBuffer = room.roomID;
+		passCopyToBrowser(GUIUtility.systemCopyBuffer);
+
+		Debug.Log(GUIUtility.systemCopyBuffer);
+	}
+
 	public void PlayerEnteredFinishZone(Player player)
 	{
 		if (room.playerFinished == null && player.inputEnabled)
 		{
 			room.playerFinished = player.playerObjectID;
+			room.countdownFinished = DateTimeOffset.Now.ToUnixTimeMilliseconds();
 
 			//Signal that the room variables have changed
 			roomVariableChanged = true;
