@@ -33,9 +33,6 @@ public class Player : MonoBehaviour
 	//This needs to be set properly, as it indicates which prefab can actually run it's logic
 	public bool isLocalPlayer;
 
-	bool playerChanged;
-
-
 	public SpawnPointScript spawnPointScript;
 	public Camera cam;
 
@@ -62,9 +59,6 @@ public class Player : MonoBehaviour
 			//Vertical action triggered?
 			if (YDown && Y > 0 && !isJumping)
 			{
-				//Flag that the player changed
-				playerChanged = true;
-
 				//Add some force to bump the player up
 				rb.AddForce(cam.transform.up * jumpPower, ForceMode.Impulse);
 
@@ -78,9 +72,6 @@ public class Player : MonoBehaviour
 				//Horizontal action triggered?
 				if (XDown && X != 0)
 				{
-					//Flag that the player changed
-					playerChanged = true;
-
 					rb.AddTorque(new Vector3(0, 0, -rotatePower * X), ForceMode.Impulse);
 				}
 			}
@@ -105,11 +96,7 @@ public class Player : MonoBehaviour
 			manager.uiSpeedo.text = (speed.ToString("F1")) + " m/s";
 			manager.chromaticAberration.intensity.Override(remap(speed, 3, 20, 0, 1));
 			CalcVelocity();
-			if (true || playerChanged)
-			{
-				manager.SyncLocalPlayer(transform, rb, true);
-				playerChanged = false;
-			}
+			manager.SyncLocalPlayer(transform, rb, true);
 		}
 	}
 

@@ -1,19 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using AOT;
 using Cinemachine;
-using NativeWebSocket;
 using Newtonsoft.Json;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Rendering.PostProcessing;
 using UnityEngine.SceneManagement;
+using static WebRTCComms;
 
 public class GameManager : MonoBehaviour
 {
 	[DllImport("__Internal")]
 	static extern void passCopyToBrowser(string str);
+
 
 	//This is the network manager, it handles connection, disconnection, etc
 	public string serverUrl; //wss://cube-run.shanegadsby.com
@@ -26,6 +27,7 @@ public class GameManager : MonoBehaviour
 
 	//This is the amount of time to count in before a game starts
 	public long countIn = 3000;
+	public long serverTime = 0;
 
 	//This is the winner/loser indicator prefab
 	public WinLoseIndicatorScript winLoseIndicatorPrefab;
@@ -50,6 +52,9 @@ public class GameManager : MonoBehaviour
 
 	//Waiting on host text
 	public TextMeshProUGUI uiWaitingOnHostText;
+
+	//Waiting on host text
+	public TextMeshProUGUI uiConnectingToServerText;
 
 	//Waiting for room text
 	public TextMeshProUGUI uiWaitingForRoomText;
@@ -95,17 +100,14 @@ public class GameManager : MonoBehaviour
 
 	//The back button on the gameplay controls screen
 	public Transform uiBackToConnections;
-	
+
 	//The back button on the gameplay controls screen
 	public Volume postProcessing;
-	
+
 	public UnityEngine.Rendering.Universal.ChromaticAberration chromaticAberration;
 
 	//Holds a list of all players
 	public List<Player> PlayerList;
-
-	//This is the websocket connection object
-	private WebSocket ws;
 
 	//This is just a flag to show if the websocket is connected
 	public bool wsConnected = false;
@@ -117,7 +119,6 @@ public class GameManager : MonoBehaviour
 
 	public RoomVariable room;
 
-
 	public struct RoomVariable
 	{
 		public string type;
@@ -127,32 +128,6 @@ public class GameManager : MonoBehaviour
 		public bool playersInputEnabled;
 		public string playerFinished;
 		public float timer;
-		public long countdownStarted;
-		public long countdownFinished;
-	}
-
-	public struct NewRoomPacket
-	{
-		public string type;
-		public bool privateGame;
-		public bool autoJoin;
-	}
-
-	public struct JoinRoomPacket
-	{
-		public string type;
-		public string roomID;
-	}
-
-	public struct VariableSyncPacket
-	{
-		public string type;
-		public string state;
-
-		public bool playersInputEnabled;
-
-		/*public float timer;*/
-		public string playerFinished;
 		public long countdownStarted;
 		public long countdownFinished;
 	}
@@ -173,7 +148,7 @@ public class GameManager : MonoBehaviour
 
 		public string playerFinished;
 
-		/*public float timer;*/
+		public long serverTime;
 		public string roomID;
 		public string playerID;
 		public int playerIndex;
@@ -189,36 +164,23 @@ public class GameManager : MonoBehaviour
 		public long countdownFinished;
 	}
 
-	public struct PositionSyncSocket
-	{
-		public string type;
-		public Vector3Json pos;
-		public Vector3Json rot;
-	}
 
 	// Start is called before the first frame update
 	void Start()
 	{
 		postProcessing.profile.TryGet<UnityEngine.Rendering.Universal.ChromaticAberration>(out chromaticAberration);
-			//.TryGetSettings(out chromaticAberration);
 
 		room = new RoomVariable();
 		lastRoom = new RoomVariable();
 
 		//Set the game to the title screen
 		SetState("connections");
+		initWebRTCComms(serverDisconnected, RoomJoined, RoomSync, PlayerJoined, PlayerSync, PlayerLeft, ConnectingToServer);
 	}
 
 	// Update is called once per frame
 	void Update()
 	{
-#if (!UNITY_WEBGL || UNITY_EDITOR)
-			if (ws != null)
-			{
-				ws.DispatchMessageQueue();
-			}
-#endif
-
 		Loop();
 	}
 
@@ -227,9 +189,13 @@ public class GameManager : MonoBehaviour
 		SyncRoomVariables();
 	}
 
-
 	public void Loop()
 	{
+		if (serverTime > 0)
+		{
+			serverTime += Convert.ToInt64(Time.deltaTime * 1000);
+		}
+
 		//This is stuff that's run just once when the states change
 		if ((room.state != lastRoom.state && !String.IsNullOrEmpty(room.state)) || reloadUI)
 		{
@@ -284,6 +250,13 @@ public class GameManager : MonoBehaviour
 
 					//Join a game
 					JoinGame(true);
+
+					break;
+
+				case "connecting to server":
+
+					//Start the waiting for player state
+					StartConnectingToServer(reloadUI);
 
 					break;
 
@@ -371,7 +344,7 @@ public class GameManager : MonoBehaviour
 
 			case "countdown":
 
-				long countdown = countIn - (DateTimeOffset.Now.ToUnixTimeMilliseconds() - room.countdownStarted);
+				long countdown = countIn - (serverTime - room.countdownStarted);
 
 
 				uiCountdownTimer.text = ((countdown / 1000) + 1).ToString();
@@ -379,24 +352,34 @@ public class GameManager : MonoBehaviour
 				if (countdown <= 0)
 				{
 					uiCountdownTimer.text = "Go!";
-					SetState("start");
+					if (localPlayer.isHost)
+					{
+						SetState("start");
+					}
 				}
 
 				break;
 
 			case "racing":
 
-				uiCountdownTimer.alpha = Mathf.Clamp(uiCountdownTimer.alpha - Time.deltaTime, 0, 1);
 
 				//If no player has won
 				if (string.IsNullOrEmpty(room.playerFinished))
 				{
-					//Increase the timer
-					//room.timer += Time.deltaTime;
+					countdown = countIn - (serverTime - room.countdownStarted);
 
-					if (room.countdownStarted > 100000)
+					uiCountdownTimer.text = ((countdown / 1000) + 1).ToString();
+
+					if (countdown <= 0)
 					{
-						long offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+						uiCountdownTimer.text = "Go!";
+						uiCountdownTimer.alpha = Mathf.Clamp(uiCountdownTimer.alpha - Time.deltaTime, 0, 1);
+					}
+					
+
+					if (room.countdownStarted > 0)
+					{
+						long offset = room.countdownFinished > 0 ? room.countdownFinished : serverTime;
 						//Set the timer ui to the new time, with 2 decimal places
 						uiTimerText.text = (((float)(offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
 					}
@@ -407,7 +390,7 @@ public class GameManager : MonoBehaviour
 				}
 				else
 				{
-					long _offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+					long _offset = room.countdownFinished > 0 ? room.countdownFinished : serverTime;
 					uiTimerText.text = (((float)(_offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
 
 					SetState("finished");
@@ -416,12 +399,11 @@ public class GameManager : MonoBehaviour
 				break;
 
 			case "finished":
-				long __offset = room.countdownFinished > 0 ? room.countdownFinished : DateTimeOffset.Now.ToUnixTimeMilliseconds();
+				long __offset = room.countdownFinished > 0 ? room.countdownFinished : serverTime;
 				uiTimerText.text = (((float)(__offset - (room.countdownStarted + countIn)) / 1000)).ToString("F2");
 				break;
 		}
 	}
-
 
 	//Hide all UI elements
 	public void ResetRoomVariables()
@@ -440,7 +422,6 @@ public class GameManager : MonoBehaviour
 		//Signal that the room variables have changed
 		roomVariableChanged = true;
 	}
-
 
 	//Hide all UI elements
 	public void ResetUI()
@@ -492,17 +473,15 @@ public class GameManager : MonoBehaviour
 
 		//
 		uiBackToConnections.gameObject.SetActive(false);
+
+		//
+		uiConnectingToServerText.gameObject.SetActive(false);
 	}
 
-	public async void StartWaitingForConnection()
+	public void StartWaitingForConnection()
 	{
 		ResetRoomVariables();
-
-		if (ws != null)
-		{
-			await ws.Close();
-			ws = null;
-		}
+		DisconnectFromServerJS();
 
 		//Show the controls button
 		uiControlsButton.gameObject.SetActive(true);
@@ -523,17 +502,11 @@ public class GameManager : MonoBehaviour
 		uiHostnameInput.gameObject.SetActive(true);
 	}
 
-
-	public async void StartControlsScreen()
+	public void StartControlsScreen()
 	{
 		ResetRoomVariables();
 
-		if (ws != null)
-		{
-			await ws.Close();
-			ws = null;
-		}
-
+		DisconnectFromServerJS();
 		uiControls.gameObject.SetActive(true);
 		uiBackToConnections.gameObject.SetActive(true);
 	}
@@ -544,10 +517,20 @@ public class GameManager : MonoBehaviour
 		uiWaitingForRoomText.gameObject.SetActive(true);
 	}
 
+	public void StartConnectingToServer(bool uiOnly)
+	{
+		//Show the "waiting for players" text
+		uiConnectingToServerText.gameObject.SetActive(true);
+	}
+
 	public void StartWaitingOnHost(bool uiOnly)
 	{
 		//Show the room code
-		uiRoomCodeGroup.gameObject.SetActive(true);
+		if (String.IsNullOrEmpty(room.roomID) == false)
+		{
+			uiRoomCodeGroup.gameObject.SetActive(true);
+		}
+
 		//Show the "waiting for players" text
 		uiWaitingOnHostText.gameObject.SetActive(true);
 
@@ -562,7 +545,7 @@ public class GameManager : MonoBehaviour
 	//This starts the race countdown
 	public void StartCountdown(bool uiOnly)
 	{
-		room.countdownStarted = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+		room.countdownStarted = serverTime;
 
 		//Reset the room
 		if (localPlayer.isHost)
@@ -639,165 +622,36 @@ public class GameManager : MonoBehaviour
 		}
 	}
 
-	WebSocket ConnectToServer()
-	{
-		WebSocket websocket = new WebSocket(serverUrl);
-
-		websocket.OnOpen += () => { wsConnected = true; };
-
-		websocket.OnError += (e) => { Debug.LogError("Error! " + e); };
-
-		websocket.OnClose += (e) =>
-		{
-			if (!gameClosing)
-			{
-				SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
-			}
-
-			wsConnected = false;
-		};
-
-		websocket.OnMessage += (bytes) =>
-		{
-			// getting the message as a SocketPacket struct
-			SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(System.Text.Encoding.UTF8.GetString(bytes));
-			switch (packet.type)
-			{
-				case "room-joined":
-					localPlayer = packet;
-					OnJoinedRoom(packet, false);
-
-					room.roomID = packet.roomID;
-					room.countdownStarted = packet.countdownStarted;
-					room.countdownFinished = packet.countdownFinished;
-
-					uiRoomCodeText.text = room.roomID;
-
-					//Set the state to waiting for players
-					SetState(packet.state ?? "waiting for players");
-					break;
-
-				case "player-joined":
-
-					//SetState(packet.state);
-
-					OnJoinedRoom(packet, true);
-					break;
-
-				case "player-left":
-					Player p = SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
-					PlayerList.Remove(p);
-					SpawnPoints[packet.playerIndex].assignedPlayer = null;
-					Destroy(p.indicator.gameObject);
-					Destroy(p.gameObject);
-
-					if (localPlayer.playerID == packet.newHost)
-					{
-						localPlayer.isHost = true;
-						reloadUI = true;
-					}
-
-					break;
-
-				case "sync-remote-player":
-					if (SpawnPoints[packet.playerIndex].assignedPlayer != null)
-					{
-						Player remotePlayer = SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
-						remotePlayer.transform.position = new Vector3(packet.pos.x, packet.pos.y, packet.pos.z);
-						remotePlayer.transform.rotation = new Quaternion(packet.rot.x, packet.rot.y, packet.rot.z, packet.rot.w);
-					}
-
-					break;
-
-				case "sync-variables":
-					room.playersInputEnabled = packet.playersInputEnabled;
-					room.countdownStarted = packet.countdownStarted;
-					room.countdownFinished = packet.countdownFinished;
-					room.playerFinished = packet.playerFinished;
-					
-					SetState(packet.state, true);
-					Loop();
-
-					break;
-
-				case "connection-error":
-					Debug.Log(packet.message);
-					break;
-			}
-		};
-
-		websocket.Connect();
-
-		return websocket;
-	}
-
 	//Start the hosting
 	public void StartHosting(bool privateGame = false)
 	{
 		room = new RoomVariable();
-		ws = ConnectToServer();
-
-		ws.OnOpen += () =>
-		{
-			if (ws.State == WebSocketState.Open)
-			{
-				NewRoomPacket packet = new NewRoomPacket();
-				packet.type = "new-room";
-				packet.autoJoin = true;
-				packet.privateGame = privateGame;
-				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
-			}
-		};
+		CreateRoomJS(privateGame);
 	}
 
 	//Join a game
 	public void JoinGame(bool joinRandom = false)
 	{
-		ws = ConnectToServer();
-		ws.OnOpen += () =>
+		JoinRoomJS(joinRandom ? "matchmaking" : uiHostnameInput.GetComponentInChildren<TMP_InputField>().text);
+		/*if (joinRandom)
 		{
-			if (ws.State == WebSocketState.Open)
-			{
-				JoinRoomPacket packet = new JoinRoomPacket();
-				packet.type = "join-room";
-				packet.roomID = joinRandom ? "matchmaking" : uiHostnameInput.GetComponentInChildren<TMP_InputField>().text;
-
-				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
-			}
-
-			//Set the state to waiting for players
-			if (joinRandom)
-			{
-				SetState("waiting for room");
-			}
-			else
-			{
-				SetState("waiting for players");
-			}
-		};
-	}
-
-	private async void OnApplicationQuit()
-	{
-		if (ws != null)
-		{
-			gameClosing = true;
-			await ws.Close();
+			SetState("waiting for room");
 		}
+		else
+		{
+			SetState("waiting for players");
+		}*/
 	}
 
 	public void OnJoinedRoom(SocketPacket player, bool remote)
 	{
 		//Sync the room variables up front
-		if (!remote)
+		if (remote == false)
 		{
 			room.playersInputEnabled = player.playersInputEnabled;
-			/*room.timer = player.timer;*/
 			room.countdownStarted = player.countdownStarted;
 			room.countdownFinished = player.countdownFinished;
 			room.playerFinished = player.playerFinished;
-			Debug.Log(22222);
-			Debug.Log(room.playerFinished);
 
 			//Signal that the room variables have changed
 			roomVariableChanged = true;
@@ -894,42 +748,27 @@ public class GameManager : MonoBehaviour
 	//Syncs the local player back to the server
 	public void SyncLocalPlayer(Transform trans, Rigidbody rb, bool positionOnly)
 	{
-		if (wsConnected)
-		{
-			PositionSyncSocket packet = new PositionSyncSocket();
-			packet.type = "sync-player";
+		Vector3 pos = trans.position;
+		Quaternion rot = trans.rotation;
 
-			packet.pos.x = (Mathf.Round(trans.position.x * 1000)) / 1000;
-			packet.pos.y = (Mathf.Round(trans.position.y * 1000)) / 1000;
-			packet.pos.z = (Mathf.Round(trans.position.z * 1000)) / 1000;
+		pos.x = (Mathf.Round(pos.x * 1000)) / 1000;
+		pos.y = (Mathf.Round(pos.y * 1000)) / 1000;
+		pos.z = (Mathf.Round(pos.z * 1000)) / 1000;
 
-			packet.rot.x = (Mathf.Round(trans.rotation.x * 1000)) / 1000;
-			packet.rot.y = (Mathf.Round(trans.rotation.y * 1000)) / 1000;
-			packet.rot.z = (Mathf.Round(trans.rotation.z * 1000)) / 1000;
-			packet.rot.w = (Mathf.Round(trans.rotation.w * 1000)) / 1000;
+		rot.x = (Mathf.Round(rot.x * 1000)) / 1000;
+		rot.y = (Mathf.Round(rot.y * 1000)) / 1000;
+		rot.z = (Mathf.Round(rot.z * 1000)) / 1000;
+		rot.w = (Mathf.Round(rot.w * 1000)) / 1000;
 
 
-			ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
-		}
+		SyncPlayerPositionJS(pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, rot.w);
 	}
 
 	public void SyncRoomVariables()
 	{
-		if (wsConnected && localPlayer.isHost)
+		if (localPlayer.isHost && roomVariableChanged)
 		{
-			if (roomVariableChanged)
-			{
-				VariableSyncPacket packet = new VariableSyncPacket();
-				packet.type = "sync-variables";
-				packet.state = room.state;
-				packet.playersInputEnabled = room.playersInputEnabled;
-				packet.playerFinished = room.playerFinished;
-				packet.countdownStarted = room.countdownStarted;
-				packet.countdownFinished = room.countdownFinished;
-
-				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
-			}
-
+			SyncRoomVariablesJS(room.state, room.playersInputEnabled, room.playerFinished, room.countdownStarted.ToString(), room.countdownFinished.ToString());
 			roomVariableChanged = false;
 		}
 	}
@@ -970,10 +809,7 @@ public class GameManager : MonoBehaviour
 			{
 				room.playerFinished = player.playerObjectID;
 
-				Debug.Log(11111);
-				Debug.Log(room.playerFinished);
-
-				room.countdownFinished = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+				room.countdownFinished = serverTime;
 
 				//Signal that the room variables have changed
 				roomVariableChanged = true;
@@ -981,5 +817,129 @@ public class GameManager : MonoBehaviour
 		}
 
 		player.inputEnabled = false;
+	}
+
+
+	/*This is all the network stuff, should be rearranged when finalized*/
+
+	[DllImport("__Internal")]
+	public static extern void initWebRTCComms(Action<string> serverDisconnected, Action<string> roomJoined, Action<string> roomSync, Action<string> playerJoined, Action<string> playerSync, Action<string> playerLeft, Action<int> ConnectingToServer);
+
+	[DllImport("__Internal")]
+	public static extern void SyncPlayerPositionJS(float x, float y, float z, float rX, float rY, float rZ, float rW);
+
+	[DllImport("__Internal")]
+	public static extern void SyncRoomVariablesJS(string state, bool playersInputEnabled, string playerFinished, string countdownStarted, string countdownFinished);
+
+	[DllImport("__Internal")]
+	public static extern void CreateRoomJS(bool privateGame);
+
+	[DllImport("__Internal")]
+	public static extern void DisconnectFromServerJS();
+
+	[DllImport("__Internal")]
+	public static extern void JoinRoomJS(string roomID);
+
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void serverDisconnected(string data)
+	{
+		//Debug.Log($"Disconnected from server");
+		SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+	}
+
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void RoomJoined(string data)
+	{
+		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+		GameManager manager = FindObjectOfType<GameManager>();
+
+		manager.serverTime = packet.serverTime;
+
+		Debug.Log(111111);
+		Debug.Log(manager.serverTime);
+
+		manager.localPlayer = packet;
+		manager.room.roomID = packet.roomID;
+		manager.room.countdownStarted = packet.countdownStarted;
+		manager.room.countdownFinished = packet.countdownFinished;
+		manager.uiRoomCodeText.text = manager.room.roomID;
+
+		manager.OnJoinedRoom(packet, false);
+
+		//Set the state to waiting for players
+		manager.SetState(packet.state ?? "waiting for players");
+
+		manager.reloadUI = true;
+		manager.Loop();
+	}
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void RoomSync(string data)
+	{
+		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+		GameManager manager = FindObjectOfType<GameManager>();
+
+		manager.room.playersInputEnabled = packet.playersInputEnabled;
+		manager.room.countdownStarted = packet.countdownStarted;
+		manager.room.countdownFinished = packet.countdownFinished;
+		manager.room.playerFinished = packet.playerFinished;
+
+		Debug.Log(22222);
+		Debug.Log(packet.state);
+		Debug.Log(packet.countdownStarted);
+		manager.SetState(packet.state, true);
+
+		manager.reloadUI = true;
+		manager.Loop();
+	}
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void PlayerJoined(string data)
+	{
+		GameManager manager = FindObjectOfType<GameManager>();
+		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+		//Debug.Log($"Remote player joined (unity side)");
+		manager.OnJoinedRoom(packet, true);
+	}
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void PlayerSync(string data)
+	{
+		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+		GameManager manager = FindObjectOfType<GameManager>();
+		if (packet.playerIndex != manager.localPlayer.playerIndex && manager.SpawnPoints[packet.playerIndex].assignedPlayer != null)
+		{
+			Player remotePlayer = manager.SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
+			remotePlayer.transform.position = new Vector3(packet.pos.x, packet.pos.y, packet.pos.z);
+			remotePlayer.transform.rotation = new Quaternion(packet.rot.x, packet.rot.y, packet.rot.z, packet.rot.w);
+		}
+	}
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void ConnectingToServer(int data)
+	{
+		GameManager manager = FindObjectOfType<GameManager>();
+		manager.SetState("connecting to server");
+	}
+
+	[MonoPInvokeCallback(typeof(Action<string>))]
+	public static void PlayerLeft(string data)
+	{
+		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+		GameManager manager = FindObjectOfType<GameManager>();
+
+		Player p = manager.SpawnPoints[packet.playerIndex].assignedPlayer.GetComponent<Player>();
+		manager.PlayerList.Remove(p);
+		manager.SpawnPoints[packet.playerIndex].assignedPlayer = null;
+		Destroy(p.indicator.gameObject);
+		Destroy(p.gameObject);
+
+		if (manager.localPlayer.playerID == packet.newHost)
+		{
+			manager.localPlayer.isHost = true;
+			manager.reloadUI = true;
+		}
 	}
 }

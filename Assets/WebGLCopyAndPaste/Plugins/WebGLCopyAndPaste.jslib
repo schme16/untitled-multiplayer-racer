@@ -108,7 +108,6 @@ var WebGLCopyAndPaste = {
     var fn = typeof UTF8ToString === 'function' ? UTF8ToString : Pointer_stringify;
     WebGLCopyAndPaste.data.clipboardStr = fn(stringPtr);
     navigator.clipboard.writeText(fn(stringPtr));
-    console.log("Ya!", fn(stringPtr))
     document.execCommand('copy')
   },
 };
