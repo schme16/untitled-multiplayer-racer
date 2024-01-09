@@ -166,6 +166,10 @@ public class GameManager : MonoBehaviour
 		public Vector3Json rot;
 		public long countdownStarted;
 		public long countdownFinished;
+		public long diff;
+		public long clientTimestamp;
+		public long serverTimestamp;
+		public long timestamp;
 	}
 
 	public struct NewRoomPacket
@@ -175,55 +179,75 @@ public class GameManager : MonoBehaviour
 		public bool autoJoin;
 	}
 
-	public struct JoinRoomPacket
+	public struct TimeSyncPacket
 	{
 		public string type;
 		public long diff;
 		public long clientTimestamp;
 		public long serverTimestamp;
+		public long timestamp;
 	}
 
-	public struct TimeSync
+	public struct JoinRoomPacket
 	{
 		public string type;
 		public string roomID;
 	}
 
+	public struct PlayerSyncPacket
+	{
+		public string type;
+		public Vector3Json pos;
+		public Vector3Json rot;
+	}
+
 	// Start is called before the first frame update
 	void Start()
 	{
-		useWebsockets = Application.isEditor;
-
+		useWebsockets = Application.platform != RuntimePlatform.WebGLPlayer;
 		postProcessing.profile.TryGet<UnityEngine.Rendering.Universal.ChromaticAberration>(out chromaticAberration);
 
 		room = new RoomVariable();
 
 		//Set the game to the title screen
 		SetState("connections");
-		initWebRTCComms(serverDisconnected, RoomJoined, RoomSync, PlayerJoined, PlayerSync, PlayerLeft, ConnectingToServer);
+
+		if (Application.platform == RuntimePlatform.WebGLPlayer)
+		{
+			initWebRTCComms(serverDisconnected, RoomJoined, RoomSync, PlayerJoined, PlayerSync, PlayerLeft, ConnectingToServer);
+		}
 	}
 
 	// Update is called once per frame
 	void Update()
 	{
-		if (useWebsockets)
+		#if (!UNITY_WEBGL || UNITY_EDITOR)
+		if (ws != null)
 		{
-			if (ws != null)
-			{
-				ws.DispatchMessageQueue();
-			}
+			ws.DispatchMessageQueue();
 		}
+		#endif
 
 		Loop();
 	}
 
 	WebSocket ConnectToWebSocketServer(bool host, string roomID, bool privateGame)
 	{
-		WebSocket websocket = new WebSocket(serverUrl);
+		ws = new WebSocket(serverUrl);
 
-		websocket.OnOpen += () =>
+		//When the connection is made
+		ws.OnOpen += () =>
 		{
+			//Socket open
 			wsConnected = true;
+
+			//before we start doing anything figure out the time diff / lag
+			TimeSyncPacket time = new TimeSyncPacket();
+			time.type = "time-sync";
+			time.timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+			ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(time)));
+
+
 			if (host)
 			{
 				NewRoomPacket packet = new NewRoomPacket();
@@ -241,24 +265,24 @@ public class GameManager : MonoBehaviour
 			}
 		};
 
-		websocket.OnError += (e) => { Debug.LogError("Error! " + e); };
+		ws.OnError += (e) => { Debug.LogError("Error! " + e); };
 
-		websocket.OnClose += (e) =>
+		ws.OnClose += (e) =>
 		{
 			wsConnected = false;
 			DisconnectFromServerMeta();
 		};
-
-		websocket.OnMessage += (bytes) =>
+		ws.OnMessage += (bytes) =>
 		{
+			//Decode the data to a string
 			string data = System.Text.Encoding.UTF8.GetString(bytes);
+
 			//Getting the message as a SocketPacket struct
 			SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
+
 			switch (packet.type)
 			{
 				case "room-joined":
-					//localPlayer = packet;
-
 					RoomJoined(data);
 					break;
 
@@ -279,8 +303,21 @@ public class GameManager : MonoBehaviour
 					break;
 
 				case "time-sync":
-					TimeSync(data);
-					Debug.Log(packet.message);
+
+					// Get current timestamp in milliseconds
+					long nowTimeStamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
+					// Parse server-client difference time and server timestamp from response
+					long serverClientRequestDiffTime = packet.diff;
+					long serverTimestamp = packet.serverTimestamp;
+
+					// Calculate server-client difference time on response and response time
+					long serverClientResponseDiffTime = nowTimeStamp - serverTimestamp;
+					long responseTime = (serverClientRequestDiffTime - nowTimeStamp + packet.clientTimestamp - serverClientResponseDiffTime) / 2;
+
+					// Calculate the synced server time
+					serverTime = nowTimeStamp + (serverClientResponseDiffTime - responseTime);
+
 					break;
 
 				case "connection-error":
@@ -289,11 +326,10 @@ public class GameManager : MonoBehaviour
 			}
 		};
 
-		websocket.Connect();
+		ws.Connect();
 
-		return websocket;
+		return ws;
 	}
-
 
 	private void FixedUpdate()
 	{
@@ -592,7 +628,6 @@ public class GameManager : MonoBehaviour
 	public void StartWaitingForConnection()
 	{
 		ResetRoomVariables();
-		DisconnectFromServerMeta();
 
 		//Show the controls button
 		uiControlsButton.gameObject.SetActive(true);
@@ -617,7 +652,6 @@ public class GameManager : MonoBehaviour
 	{
 		ResetRoomVariables();
 
-		DisconnectFromServerJS();
 		uiControls.gameObject.SetActive(true);
 		uiBackToConnections.gameObject.SetActive(true);
 	}
@@ -743,7 +777,8 @@ public class GameManager : MonoBehaviour
 	//Join a game
 	public void JoinGame(bool joinRandom = false)
 	{
-		JoinRoomJS(joinRandom ? "matchmaking" : uiHostnameInput.GetComponentInChildren<TMP_InputField>().text);
+		JoinRoomMeta(joinRandom ? "matchmaking" : uiHostnameInput.GetComponentInChildren<TMP_InputField>().text);
+
 		/*if (joinRandom)
 		{
 			SetState("waiting for room");
@@ -759,6 +794,8 @@ public class GameManager : MonoBehaviour
 		//Sync the room variables up front
 		if (remote == false)
 		{
+			
+			//TODO: [BUG] players who join after a round has been restarted can move immediately
 			room.playersInputEnabled = player.playersInputEnabled;
 			room.countdownStarted = player.countdownStarted;
 			room.countdownFinished = player.countdownFinished;
@@ -804,7 +841,9 @@ public class GameManager : MonoBehaviour
 				//Reset the position, rotation, and velocity values
 				newPlayer.transform.rotation = new Quaternion(player.rot.x, player.rot.y, player.rot.z, player.rot.w);
 
+				newPlayer.rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
 				newPlayer.rb.isKinematic = true;
+				//Destroy(newPlayer.rb);
 			}
 
 			else
@@ -872,7 +911,7 @@ public class GameManager : MonoBehaviour
 		rot.w = (Mathf.Round(rot.w * 1000)) / 1000;
 
 
-		SyncPlayerPositionJS(pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, rot.w);
+		SyncPlayerMeta(pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, rot.w);
 	}
 
 	public void SyncRoomVariables()
@@ -907,7 +946,11 @@ public class GameManager : MonoBehaviour
 	public void CopyRoomCode()
 	{
 		GUIUtility.systemCopyBuffer = room.roomID;
-		passCopyToBrowser(GUIUtility.systemCopyBuffer);
+
+		if (Application.platform == RuntimePlatform.WebGLPlayer)
+		{
+			passCopyToBrowser(GUIUtility.systemCopyBuffer);
+		}
 
 		Debug.Log(GUIUtility.systemCopyBuffer);
 	}
@@ -930,7 +973,7 @@ public class GameManager : MonoBehaviour
 		player.inputEnabled = false;
 	}
 
-	private async void OnApplicationQuit()
+	private void OnApplicationQuit()
 	{
 		gameClosing = true;
 		DisconnectFromServerMeta();
@@ -957,9 +1000,19 @@ public class GameManager : MonoBehaviour
 	[DllImport("__Internal")]
 	public static extern void JoinRoomJS(string roomID);
 
-	public void CreateRoomWebSocket()
+	public void CreateRoomWebSocket(bool privateGame)
 	{
-		ConnectToWebSocketServer();
+		ConnectToWebSocketServer(true, null, privateGame);
+	}
+
+	public void JoinRoomWebSocket(string roomID)
+	{
+		ConnectToWebSocketServer(false, roomID, false);
+	}
+
+	public void SyncRoomVariablesWebSocket(RoomVariable packet)
+	{
+		ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
 	}
 
 	[MonoPInvokeCallback(typeof(Action<string>))]
@@ -967,7 +1020,6 @@ public class GameManager : MonoBehaviour
 	{
 		serverDisconnected(" ");
 	}
-
 
 	[MonoPInvokeCallback(typeof(Action<string>))]
 	public static void serverDisconnected(string data)
@@ -985,10 +1037,10 @@ public class GameManager : MonoBehaviour
 		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
 		GameManager manager = FindObjectOfType<GameManager>();
 
-		manager.serverTime = packet.serverTime;
-
-		Debug.Log(111111);
-		Debug.Log(manager.serverTime);
+		if (manager.serverTime == 0)
+		{
+			manager.serverTime = packet.serverTime;
+		}
 
 		manager.localPlayer = packet;
 		manager.room.roomID = packet.roomID;
@@ -1016,9 +1068,6 @@ public class GameManager : MonoBehaviour
 		manager.room.countdownFinished = packet.countdownFinished;
 		manager.room.playerFinished = packet.playerFinished;
 
-		Debug.Log(22222);
-		Debug.Log(packet.state);
-		Debug.Log(packet.countdownStarted);
 		manager.SetState(packet.state, true);
 
 		manager.reloadUI = true;
@@ -1030,7 +1079,7 @@ public class GameManager : MonoBehaviour
 	{
 		GameManager manager = FindObjectOfType<GameManager>();
 		SocketPacket packet = JsonConvert.DeserializeObject<SocketPacket>(data);
-		//Debug.Log($"Remote player joined (unity side)");
+
 		manager.OnJoinedRoom(packet, true);
 	}
 
@@ -1073,26 +1122,51 @@ public class GameManager : MonoBehaviour
 		}
 	}
 
-	[MonoPInvokeCallback(typeof(Action<string>))]
-	public static void TimeSync(string data)
-	{
-		TimeSync packet = JsonConvert.DeserializeObject<TimeSync>(data);
-		GameManager manager = FindObjectOfType<GameManager>();
-		
-
-	}
-
 
 	public void SyncRoomVariablesMeta(string state, bool playersInputEnabled, string playerFinished, string countdownStarted, string countdownFinished)
 	{
 		if (Application.isEditor || useWebsockets)
 		{
-			Debug.Log(11111);
+			RoomVariable packet = new RoomVariable();
+			packet.type = "room-sync";
+			packet.state = state;
+			packet.playersInputEnabled = playersInputEnabled;
+			packet.playerFinished = playerFinished;
+			packet.countdownStarted = (long)Convert.ToDouble(countdownStarted);
+			packet.countdownFinished = (long)Convert.ToDouble(countdownFinished);
+			SyncRoomVariablesWebSocket(packet);
 		}
 		else
 		{
 			SyncRoomVariablesJS(state, playersInputEnabled, playerFinished, countdownStarted, countdownFinished);
-			Debug.Log(22222);
+		}
+	}
+
+	public void SyncPlayerMeta(float x, float y, float z, float rX, float rY, float rZ, float rW)
+	{
+		if (Application.isEditor || useWebsockets)
+		{
+			PlayerSyncPacket packet = new PlayerSyncPacket();
+			packet.type = "player-sync";
+			packet.pos = new Vector3Json();
+			packet.pos.x = x;
+			packet.pos.y = y;
+			packet.pos.z = z;
+
+			packet.rot = new Vector3Json();
+			packet.rot.x = rX;
+			packet.rot.y = rY;
+			packet.rot.z = rZ;
+			packet.rot.w = rW;
+
+			if (wsConnected)
+			{
+				ws.Send(System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(packet)));
+			}
+		}
+		else
+		{
+			SyncPlayerPositionJS(x, y, z, rX, rY, rZ, rW);
 		}
 	}
 
@@ -1100,26 +1174,28 @@ public class GameManager : MonoBehaviour
 	{
 		if (Application.isEditor || useWebsockets)
 		{
-			Debug.Log(11111);
 			CreateRoomWebSocket(privateGame);
 		}
 		else
 		{
 			CreateRoomJS(privateGame);
-			Debug.Log(22222);
+		}
+	}
+
+	public void JoinRoomMeta(string roomID)
+	{
+		if (Application.isEditor || useWebsockets)
+		{
+			JoinRoomWebSocket(roomID);
+		}
+		else
+		{
+			JoinRoomJS(roomID);
 		}
 	}
 
 	public void DisconnectFromServerMeta()
 	{
 		serverDisconnected();
-	}
-
-	public void JoinRoomMeta()
-	{
-		if (Application.isEditor)
-		{
-			Debug.Log(11111);
-		}
 	}
 }

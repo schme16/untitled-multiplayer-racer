@@ -70,9 +70,9 @@ var WebRTCComms = {
 			}
 
 			WebRTCComms.channel = geckos({
-				url: 'https://cube-run.shanegadsby.com',
-				port: 443
-				//port: 7777
+				//url: 'https://cube-run.shanegadsby.com',
+				//port: 443
+				port: 7777
 			})
 
 			WebRTCComms.channel.onConnect(error => {
