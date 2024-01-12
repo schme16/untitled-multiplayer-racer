@@ -8003,7 +8003,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e90b43fbc0111894484b861e734aa8b1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  serverUrl: ws://localhost:7778
+  serverUrl: wss://cube-run-ws.shanegadsby.com
   PlayerPrefab: {fileID: 4200015347909862630, guid: 463d1acba06eb13488066ee9b8d0b126,
     type: 3}
   lastState: 

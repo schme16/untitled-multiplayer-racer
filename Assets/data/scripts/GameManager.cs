@@ -204,7 +204,7 @@ public class GameManager : MonoBehaviour
 	// Start is called before the first frame update
 	void Start()
 	{
-		useWebsockets = Application.platform != RuntimePlatform.WebGLPlayer;
+		useWebsockets = true; //Application.platform != RuntimePlatform.WebGLPlayer;
 		postProcessing.profile.TryGet<UnityEngine.Rendering.Universal.ChromaticAberration>(out chromaticAberration);
 
 		room = new RoomVariable();
@@ -650,8 +650,6 @@ public class GameManager : MonoBehaviour
 
 	public void StartControlsScreen()
 	{
-		ResetRoomVariables();
-
 		uiControls.gameObject.SetActive(true);
 		uiBackToConnections.gameObject.SetActive(true);
 	}
@@ -664,6 +662,7 @@ public class GameManager : MonoBehaviour
 
 	public void StartConnectingToServer(bool uiOnly)
 	{
+		
 		//Show the "waiting for players" text
 		uiConnectingToServerText.gameObject.SetActive(true);
 	}
@@ -730,13 +729,8 @@ public class GameManager : MonoBehaviour
 	//This resets the race, so that you can play again
 	public void RestartRace(bool uiOnly)
 	{
-		room.playerFinished = null;
-
-		room.countdownFinished = 0;
-
-		//Signal that the room variables have changed
-		roomVariableChanged = true;
-
+		ResetRoomVariables();
+		
 		foreach (Player player in FindObjectsOfType<Player>())
 		{
 			player.ResetPlayer();
@@ -771,6 +765,7 @@ public class GameManager : MonoBehaviour
 	public void StartHosting(bool privateGame = false)
 	{
 		room = new RoomVariable();
+		
 		CreateRoomMeta(privateGame);
 	}
 
@@ -794,8 +789,6 @@ public class GameManager : MonoBehaviour
 		//Sync the room variables up front
 		if (remote == false)
 		{
-			
-			//TODO: [BUG] players who join after a round has been restarted can move immediately
 			room.playersInputEnabled = player.playersInputEnabled;
 			room.countdownStarted = player.countdownStarted;
 			room.countdownFinished = player.countdownFinished;
